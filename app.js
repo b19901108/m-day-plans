@@ -1,15 +1,14 @@
-// State Management with LocalStorage
-const STORAGE_KEY = 'plandiary_data_v2';
+const STORAGE_KEY = 'plandiary_data_v3';
 
 const defaultState = {
   theme: 'light',
   step: 1, // 1: Tasks, 2: Period, 3: Planner, 4: Finished Analytics
   tasks: [],
-  period: 'Week', // Day, Week, Month, Year
+  period: 'Week',
   gridData: {},
-  diary: {},
-  reflection: { positive: '', improvement: '' },
-  history: []
+  diaries: {}, // Keyed by day slot: { "Mon": { text: '', mood: 'Good' }, ... }
+  selectedDiaryKey: 'Mon',
+  reflection: { positive: '', improvement: '' }
 };
 
 function loadState() {
@@ -27,7 +26,6 @@ function updateTheme() {
   document.documentElement.setAttribute('data-theme', state.theme);
 }
 
-// App Renderer
 function render() {
   updateTheme();
   const app = document.getElementById('app');
@@ -55,7 +53,6 @@ function renderCurrentStep() {
   return '';
 }
 
-// STEP 1: Add Tasks
 function renderStep1() {
   return `
     <div class="card">
@@ -89,7 +86,6 @@ function renderStep1() {
   `;
 }
 
-// STEP 2: Choose Period
 function renderStep2() {
   return `
     <div class="card">
@@ -103,16 +99,19 @@ function renderStep2() {
         <button class="period-btn" onclick="selectPeriod('Year')">Year</button>
       </div>
 
-      <div style="margin-top: 24px; display: flex; justify-content: space-between;">
+      <div style="margin-top: 24px;">
         <button class="btn" onclick="goToStep(1)">Back</button>
       </div>
     </div>
   `;
 }
 
-// STEP 3: Planner Grid & Diary
 function renderStep3() {
   const columns = getColumnsForPeriod(state.period);
+  if (!columns.includes(state.selectedDiaryKey)) {
+    state.selectedDiaryKey = columns[0];
+  }
+
   const totalCheckboxes = state.tasks.length * columns.length;
   let completedCount = 0;
 
@@ -124,6 +123,7 @@ function renderStep3() {
   });
 
   const progress = totalCheckboxes > 0 ? Math.round((completedCount / totalCheckboxes) * 100) : 0;
+  const activeDiary = state.diaries[state.selectedDiaryKey] || { text: '', mood: 'Good' };
 
   return `
     <div class="card">
@@ -166,25 +166,37 @@ function renderStep3() {
       </table>
     </div>
 
-    <!-- Diary Section -->
+    <!-- Daily Diary Section (1 Day = 1 Diary) -->
     <div class="card">
-      <h2>Diary & Notes</h2>
-      <p style="color: var(--text-secondary); margin-bottom: 12px;">Log your thoughts, observations, and key achievements for this period.</p>
+      <h2>Daily Diary Entries</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 12px;">Select a day to write and save a specific diary entry for that day.</p>
       
-      <div style="margin-bottom: 12px;">
-        <label style="font-weight: 600; font-size: 0.9rem;">Period Overall Status / Mood:</label>
-        <select class="input-field" style="width: 180px; margin-left: 8px;" onchange="updateDiaryMood(this.value)">
-          <option value="Great" ${state.diary.mood === 'Great' ? 'selected' : ''}>Status: Great</option>
-          <option value="Good" ${state.diary.mood === 'Good' ? 'selected' : ''}>Status: Good</option>
-          <option value="Neutral" ${state.diary.mood === 'Neutral' ? 'selected' : ''}>Status: Neutral</option>
-          <option value="Challenging" ${state.diary.mood === 'Challenging' ? 'selected' : ''}>Status: Challenging</option>
-        </select>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;">
+        ${columns.map(col => `
+          <button class="btn ${state.selectedDiaryKey === col ? 'btn-primary' : ''}" onclick="selectDiaryDay('${col}')">
+            ${col} ${(state.diaries[col] && state.diaries[col].text.trim()) ? '•' : ''}
+          </button>
+        `).join('')}
       </div>
 
-      <textarea class="diary-input" placeholder="Write your diary entry here..." oninput="updateDiaryText(this.value)">${state.diary.text || ''}</textarea>
+      <div style="background: var(--accent-light); padding: 16px; border-radius: 8px; border: 1px solid var(--border-color);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <h3 style="font-size: 1.05rem;">Diary for <u>${state.selectedDiaryKey}</u></h3>
+          <div>
+            <label style="font-weight: 600; font-size: 0.85rem; margin-right: 6px;">Status:</label>
+            <select class="input-field" style="width: 140px; display: inline-block;" onchange="updateDiaryMood('${state.selectedDiaryKey}', this.value)">
+              <option value="Great" ${activeDiary.mood === 'Great' ? 'selected' : ''}>Great</option>
+              <option value="Good" ${activeDiary.mood === 'Good' ? 'selected' : ''}>Good</option>
+              <option value="Neutral" ${activeDiary.mood === 'Neutral' ? 'selected' : ''}>Neutral</option>
+              <option value="Challenging" ${activeDiary.mood === 'Challenging' ? 'selected' : ''}>Challenging</option>
+            </select>
+          </div>
+        </div>
+
+        <textarea class="diary-input" placeholder="Write your diary entry for ${state.selectedDiaryKey}..." oninput="updateDiaryText('${state.selectedDiaryKey}', this.value)">${activeDiary.text || ''}</textarea>
+      </div>
     </div>
 
-    <!-- Reflection Section -->
     <div class="card">
       <h2>Reflection</h2>
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px;">
@@ -201,7 +213,6 @@ function renderStep3() {
   `;
 }
 
-// STEP 4: Finished Analytics
 function renderStep4() {
   const columns = getColumnsForPeriod(state.period);
   const totalCheckboxes = state.tasks.length * columns.length;
@@ -215,12 +226,11 @@ function renderStep4() {
   });
 
   const progress = totalCheckboxes > 0 ? Math.round((completedCount / totalCheckboxes) * 100) : 0;
+  const loggedDaysCount = Object.keys(state.diaries).filter(k => state.diaries[k].text && state.diaries[k].text.trim()).length;
 
   return `
     <div class="card" style="border-top: 4px solid var(--success);">
       <h2>Period Summary & Data Analytics</h2>
-      <p style="color: var(--text-secondary); margin-bottom: 16px;">Here is your performance breakdown and record for this finished cycle.</p>
-
       <div class="metrics-grid">
         <div class="metric-card">
           <div class="metric-value">${progress}%</div>
@@ -235,15 +245,29 @@ function renderStep4() {
           <div class="metric-label">Total Planned Tasks</div>
         </div>
         <div class="metric-card">
-          <div class="metric-value">${state.diary.mood || 'Not Set'}</div>
-          <div class="metric-label">Overall Status</div>
+          <div class="metric-value">${loggedDaysCount} / ${columns.length}</div>
+          <div class="metric-label">Days Logged</div>
         </div>
       </div>
     </div>
 
     <div class="card">
-      <h3>Logged Diary Entry</h3>
-      <p style="margin-top: 8px; color: var(--text-primary); white-space: pre-wrap;">${state.diary.text || 'No diary entries recorded for this period.'}</p>
+      <h3>All Daily Diary Entries</h3>
+      <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 12px;">
+        ${columns.map(col => {
+          const entry = state.diaries[col];
+          const hasText = entry && entry.text.trim();
+          return `
+            <div style="border: 1px solid var(--border-color); padding: 12px; border-radius: 8px; background: var(--card-bg);">
+              <div style="display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 4px;">
+                <span>${col}</span>
+                <span style="font-size: 0.85rem; color: var(--text-secondary);">Status: ${entry ? entry.mood : 'Not Set'}</span>
+              </div>
+              <p style="color: var(--text-primary); white-space: pre-wrap; font-size: 0.95rem;">${hasText ? entry.text : '<span style="color:var(--text-secondary); font-style:italic;">No diary entry recorded for this day.</span>'}</p>
+            </div>
+          `;
+        }).join('')}
+      </div>
     </div>
 
     <div class="card">
@@ -263,7 +287,6 @@ function renderStep4() {
   `;
 }
 
-// Utility Functions
 function getColumnsForPeriod(period) {
   if (period === 'Day') return ['Morning', 'Afternoon', 'Evening'];
   if (period === 'Week') return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -272,7 +295,6 @@ function getColumnsForPeriod(period) {
   return [];
 }
 
-// Event Handlers
 function addTask() {
   const input = document.getElementById('taskInput');
   const prioritySelect = document.getElementById('taskPriority');
@@ -301,6 +323,7 @@ function goToStep(stepNum) {
 function selectPeriod(p) {
   state.period = p;
   state.step = 3;
+  state.selectedDiaryKey = getColumnsForPeriod(p)[0];
   saveState(state);
   render();
 }
@@ -311,13 +334,21 @@ function toggleGrid(key) {
   render();
 }
 
-function updateDiaryMood(val) {
-  state.diary.mood = val;
+function selectDiaryDay(dayKey) {
+  state.selectedDiaryKey = dayKey;
+  saveState(state);
+  render();
+}
+
+function updateDiaryMood(dayKey, val) {
+  if (!state.diaries[dayKey]) state.diaries[dayKey] = { text: '', mood: 'Good' };
+  state.diaries[dayKey].mood = val;
   saveState(state);
 }
 
-function updateDiaryText(val) {
-  state.diary.text = val;
+function updateDiaryText(dayKey, val) {
+  if (!state.diaries[dayKey]) state.diaries[dayKey] = { text: '', mood: 'Good' };
+  state.diaries[dayKey].text = val;
   saveState(state);
 }
 
@@ -337,7 +368,7 @@ function resetPlan() {
     state.step = 1;
     state.tasks = [];
     state.gridData = {};
-    state.diary = {};
+    state.diaries = {};
     state.reflection = { positive: '', improvement: '' };
     saveState(state);
     render();
@@ -350,5 +381,4 @@ function toggleTheme() {
   render();
 }
 
-// Initial render
 render();
